@@ -1,8 +1,8 @@
 {
     "manifest_version": 3,
     "name": "HAR Downloader",
-    "version": "1.0",
-    "description": "Automatically download HAR from a website",
+    "version": "1.1",
+    "description": "Automatically download HAR from a website with UI",
     "permissions": [
         "debugger",
         "activeTab",
@@ -12,6 +12,7 @@
         "service_worker": "background.js"
     },
     "action": {
+        "default_popup": "popup.html",
         "default_title": "Capture HAR"
     }
 }

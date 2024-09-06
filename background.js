@@ -1,4 +1,4 @@
-let networkEvents = [];
+let networkEvents = {};
 
 // Listen for messages from popup.js
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -8,14 +8,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         // Log that we're generating the HAR
         console.log("Generating HAR for tab:", tabId);
 
-        // If no network events were captured, log a warning
-        if (networkEvents.length === 0) {
-            console.warn("No network events were captured.");
-        } else {
-            console.log("Captured network events:", networkEvents);
-        }
-
-        // Convert the captured network events to a HAR file format
         const har = createHAR(networkEvents);
 
         // Use FileReader to convert HAR to base64 for downloading
@@ -38,7 +30,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         reader.readAsDataURL(harBlob); // Convert HAR file to Base64
 
         // Clear network events for the next session
-        networkEvents = [];
+        networkEvents = {};
 
         // Return true to indicate async response handling
         return true;
@@ -47,18 +39,31 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
 // Listen to network events when debugging is attached
 chrome.debugger.onEvent.addListener((source, method, params) => {
+    const requestId = params.requestId;
+
     if (method === "Network.requestWillBeSent") {
-        networkEvents.push({ type: 'request', data: params });
+        networkEvents[requestId] = {
+            request: params,
+            response: null,
+            body: null
+        };
         console.log("Network request captured:", params.request.url);
     }
+
     if (method === "Network.responseReceived") {
-        networkEvents.push({ type: 'response', data: params });
+        if (networkEvents[requestId]) {
+            networkEvents[requestId].response = params;
+        }
         console.log("Network response received:", params.response.url);
     }
+
     if (method === "Network.loadingFinished") {
-        console.log("Network loading finished for:", params.requestId);
         chrome.debugger.sendCommand(source, "Network.getResponseBody", { requestId: params.requestId }, (responseBody) => {
-            networkEvents.push({ type: 'body', data: responseBody });
+            if (chrome.runtime.lastError) {
+                console.warn("No body available for request:", requestId, chrome.runtime.lastError);
+            } else if (networkEvents[requestId]) {
+                networkEvents[requestId].body = responseBody;
+            }
         });
     }
 });
@@ -74,43 +79,40 @@ function createHAR(networkEvents) {
             title: "Captured HAR",
             pageTimings: {}
         }],
-        entries: networkEvents.map(event => {
-            if (event.type === 'request') {
-                return {
-                    startedDateTime: new Date(event.data.wallTime * 1000).toISOString(),
-                    request: {
-                        method: event.data.request.method,
-                        url: event.data.request.url,
-                        headers: event.data.request.headers,
-                        queryString: [],
-                        postData: event.data.request.postData ? event.data.request.postData.text : "",
-                        headersSize: -1,
-                        bodySize: -1
-                    },
-                    response: {},  // Add response details in responseReceived handler
-                    timings: { send: 0, wait: 0, receive: 0 },
-                    time: 0,
-                    cache: {},
-                    pageref: "page_1"
-                };
-            } else if (event.type === 'response') {
-                // Add response details here
-                return {
-                    response: {
-                        status: event.data.response.status,
-                        statusText: event.data.response.statusText,
-                        headers: event.data.response.headers,
-                        content: {
-                            mimeType: event.data.response.mimeType,
-                            size: event.data.response.encodedDataLength
-                        },
-                        headersSize: -1,
-                        bodySize: event.data.response.encodedDataLength
-                    }
-                };
-            }
-        })
+        entries: []
     };
+
+    for (const [requestId, event] of Object.entries(networkEvents)) {
+        if (event.request && event.response) {
+            harLog.entries.push({
+                startedDateTime: new Date(event.request.wallTime * 1000).toISOString(),
+                request: {
+                    method: event.request.request.method,
+                    url: event.request.request.url,
+                    headers: event.request.request.headers,
+                    queryString: [],
+                    postData: event.request.request.postData ? event.request.request.postData.text : "",
+                    headersSize: -1,
+                    bodySize: -1
+                },
+                response: {
+                    status: event.response.response.status,
+                    statusText: event.response.response.statusText,
+                    headers: event.response.response.headers,
+                    content: {
+                        mimeType: event.response.response.mimeType,
+                        size: event.response.response.encodedDataLength
+                    },
+                    headersSize: -1,
+                    bodySize: event.response.response.encodedDataLength
+                },
+                timings: { send: 0, wait: 0, receive: 0 },
+                time: 0,
+                cache: {},
+                pageref: "page_1"
+            });
+        }
+    }
 
     return { log: harLog };
 }
